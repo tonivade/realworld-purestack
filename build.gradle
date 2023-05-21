@@ -1,0 +1,141 @@
+plugins {
+  id 'java-library'
+  id 'application'
+  id 'de.undercouch.download' version '5.4.0'
+  id 'org.mikeneck.graalvm-native-image' version '1.4.1'
+  id 'com.github.ben-manes.versions' version '0.46.0'
+}
+
+archivesBaseName = 'realworld-purestack'
+version = '0.1.0-SNAPSHOT'
+
+repositories {
+  mavenLocal()
+  mavenCentral()
+  maven {
+    url = 'https://oss.sonatype.org/content/repositories/snapshots'
+  }
+}
+
+java {
+  toolchain {
+    languageVersion = JavaLanguageVersion.of(20)
+  }
+}
+
+test {
+  useJUnitPlatform()
+
+  jvmArgs(['--enable-preview'])
+}
+
+javadoc.options {
+  addStringOption('-release', '20')
+}
+
+compileJava {
+  options.compilerArgs << '-Xlint:unchecked'
+  options.compilerArgs << '-Xlint:rawtypes'
+  options.compilerArgs << '--enable-preview'
+  options.release = 20
+}
+
+compileTestJava {
+  options.compilerArgs << '-Xlint:unchecked'
+  options.compilerArgs << '-Xlint:rawtypes'
+  options.compilerArgs << '--enable-preview'
+  options.release = 20
+}
+
+dependencies {
+  annotationProcessor 'com.github.tonivade:purejson:0.4-SNAPSHOT'
+  implementation 'com.github.tonivade:purefun-monad:4.1-SNAPSHOT'
+  implementation 'com.github.tonivade:purefun-effect:4.1-SNAPSHOT'
+  implementation 'com.github.tonivade:purefun-transformer:4.1-SNAPSHOT'
+  runtimeOnly 'com.github.tonivade:purefun-instances:4.1-SNAPSHOT'
+  implementation 'com.github.tonivade:zeromock-server:0.17.0-SNAPSHOT'
+  implementation 'com.github.tonivade:puredbc:0.5-SNAPSHOT'
+  implementation 'com.github.tonivade:purecfg:0.5-SNAPSHOT'
+  implementation 'com.github.tonivade:purejson:0.4-SNAPSHOT'
+  implementation 'com.zaxxer:HikariCP:5.0.1'
+  runtimeOnly 'com.h2database:h2:2.1.214'
+  runtimeOnly 'ch.qos.logback:logback-classic:1.4.6'
+  testImplementation 'com.github.tonivade:zeromock-junit5:0.17.0-SNAPSHOT'
+  testImplementation 'com.github.tonivade:zeromock-client:0.17.0-SNAPSHOT'
+  testImplementation 'com.github.tonivade:purecheck:0.4-SNAPSHOT'
+  testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.9.2'
+  testRuntimeOnly 'org.junit.platform:junit-platform-runner:1.9.2'
+  testImplementation 'org.mockito:mockito-core:5.2.0'
+  testImplementation 'org.mockito:mockito-junit-jupiter:5.2.0'
+  testImplementation 'org.assertj:assertj-core:3.24.2'
+}
+
+application {
+  mainClass = 'com.github.tonivade.todo.Application'
+  applicationDefaultJvmArgs << '--enable-preview'
+}
+
+task fatJar(type: Jar) {
+  manifest {
+    attributes "Main-Class": "com.github.tonivade.todo.Application"
+  }
+  archiveClassifier = "all"
+  duplicatesStrategy = "warn"
+  from {
+    configurations.compileClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+  }
+  with jar
+}
+
+task downloadGraalvm(type: Download) {
+  src "https://github.com/graalvm/graalvm-ce-dev-builds/releases/download/23.0.0-dev-20230216_0055/graalvm-ce-java19-linux-amd64-dev.tar.gz"
+  dest new java.io.File(buildDir, "graalvm.tar.gz")
+  onlyIfModified true
+}
+
+task extractGraalvm(dependsOn: downloadGraalvm, type: Exec) {
+  workingDir "$buildDir"
+  commandLine 'tar', 'zxvf', 'graalvm.tar.gz'
+}
+
+nativeImage {
+  graalVmHome = "${buildDir}/graalvm-ce-java19-23.0.0-dev"
+  mainClass = "com.github.tonivade.todo.Application"
+  executableName = "todo-backend"
+  arguments(
+          '--verbose',
+          '--report-unsupported-elements-at-runtime',
+          '--no-fallback',
+          '--enable-preview',
+          '--allow-incomplete-classpath',
+          '--initialize-at-run-time=com.oracle.truffle.js.scriptengine.GraalJSEngineFactory',
+          '-H:JNIConfigurationFiles=src/native-image/jni-config.json',
+          '-H:ResourceConfigurationFiles=src/native-image/resource-config.json',
+          '-H:ReflectionConfigurationFiles=src/native-image/reflect-config.json'
+  )
+}
+
+task downloadUpx(type: Download) {
+  src "https://github.com/upx/upx/releases/download/v4.0.2/upx-4.0.2-amd64_linux.tar.xz"
+  dest new java.io.File(buildDir, "upx.tar.xz")
+  onlyIfModified true
+}
+
+task extractUpx(dependsOn: downloadUpx, type: Exec) {
+  workingDir "$buildDir"
+  commandLine 'tar', '-xvf', 'upx.tar.xz'
+}
+
+task compressExecutable(dependsOn: nativeImage, type: Exec) {
+  workingDir "$buildDir/upx-4.0.2-amd64_linux"
+  commandLine './upx', '--best', '../native-image/todo-backend'
+}
+
+installNativeImage {
+  dependsOn extractGraalvm
+}
+
+nativeImage {
+  finalizedBy compressExecutable
+}
